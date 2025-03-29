@@ -1,205 +1,152 @@
-import * as dotenv from 'dotenv';
+import sodium from 'sodium-native';
 import chalk from 'chalk';
-import { fileURLToPath } from 'url';
+import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
-import { existsSync } from 'fs';
+import { createHash } from 'crypto';
+import { fileURLToPath } from 'url';
 
-/**
- * SECURITY NOTICE: This module handles sensitive information like private keys.
- * 
- * Security measures implemented:
- * 1. Environment variables are loaded securely with proper precedence
- * 2. Private keys are redacted from memory after first use
- * 3. Console output is sanitized to prevent leaking secrets
- * 4. Multiple security prevention methods are in place to block accidental exposure
- * 5. Strict validation of required environment variables
- * 
- * Environment Variable Precedence:
- * 1. Environment variables already set (from Cursor/Claude config)
- * 2. Environment variables from .env file (if #1 is not available)
- * 3. Default values for optional variables
- */
+// Define types for configuration variables
+interface Config {
+  RECALL_BUCKET_ALIAS: string;
+  RECALL_LOG_PREFIX: string;
+  RECALL_NETWORK: string;
+}
 
-// Setup enhanced environment loading
-const setupEnvironment = () => {
-  // Check if the required environment variables are already set
-  // (This would be the case if Cursor/Claude set them from their JSON config)
-  const hasRequiredEnvVars = !!process.env.RECALL_PRIVATE_KEY;
+// Define logger interface
+interface Logger {
+  error: (...args: any[]) => void;
+  warn: (...args: any[]) => void;
+  info: (...args: any[]) => void;
+}
 
-  if (hasRequiredEnvVars) {
-    // Variables already exist in environment (from Cursor/Claude JSON config)
-    console.error(chalk.blue('📋 Using environment variables from Cursor/Claude configuration.'));
-    return; // Skip loading .env since we already have what we need
+// Redaction function with type safety
+const redactSensitive = (input: any): any => {
+  if (typeof input === 'string') {
+    return input
+      .replace(/[0-9a-fA-F]{64}/g, '[REDACTED_KEY]') // Hex keys
+      .replace(/[^=&\s]{32,}/g, '[REDACTED_LONG_VALUE]') // Long strings
+      .replace(/(private_key|secret|key|token|password)=([^&\s]+)/gi, '$1=[REDACTED]');
   }
-
-  // Get the directory of the current module
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = dirname(__filename);
-
-  // Try to find and load the .env file from various possible locations
-  const envPaths = [
-    resolve(process.cwd(), '.env'),
-    resolve(__dirname, '../.env'),
-    resolve(__dirname, '../../.env')
-  ];
-
-  let loaded = false;
-  for (const path of envPaths) {
-    if (existsSync(path)) {
-      dotenv.config({ path });
-      loaded = true;
-      console.error(chalk.blue(`📋 Loaded environment from .env file at: ${path}`));
-      break;
+  if (input && typeof input === 'object') {
+    const sanitized: Record<string, any> = {};
+    for (const [key, value] of Object.entries(input)) {
+      sanitized[key] = key.toLowerCase().includes('key') || key.toLowerCase().includes('secret')
+        ? '[REDACTED]'
+        : redactSensitive(value);
     }
+    return sanitized;
+  }
+  return input;
+};
+
+// Custom logger implementation
+export const logger: Logger = {
+  error: (...args: any[]) => process.stderr.write(`${chalk.red('[ERROR]')} ${args.map(redactSensitive).join(' ')}\n`),
+  warn: (...args: any[]) => process.stderr.write(`${chalk.yellow('[WARN]')} ${args.map(redactSensitive).join(' ')}\n`),
+  info: (...args: any[]) => process.stdout.write(`${chalk.blue('[INFO]')} ${args.map(redactSensitive).join(' ')}\n`),
+};
+
+// Secure secret storage
+let secretBuffer: sodium.SecureBuffer | null = null;
+let secretLoaded: boolean = false;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const ENV_FILE_PATH: string = resolve(__dirname, '..', '.env');
+const EXPECTED_ENV_HASH: string | null = process.env.ENV_FILE_HASH || null; // Optional integrity hash
+
+// Load secrets with priority: external env > .env file
+const loadSecrets = (): void => {
+  if (secretLoaded) return;
+
+  // Check external environment first
+  const externalKey: string | undefined = process.env.RECALL_PRIVATE_KEY;
+  if (externalKey) {
+    secretBuffer = sodium.sodium_malloc(externalKey.length) as sodium.SecureBuffer;
+    secretBuffer.write(externalKey);
+    sodium.sodium_mlock(secretBuffer); // Lock memory to prevent swapping
+    process.env.RECALL_PRIVATE_KEY = '[REDACTED]'; // Redact immediately
+    logger.info('Using RECALL_PRIVATE_KEY from external environment variables.');
+    secretLoaded = true;
+    return;
   }
 
-  if (!loaded) {
-    console.error(chalk.yellow('⚠️ No .env file found. Will use default values where possible.'));
+  // Fall back to .env file
+  try {
+    const envContent: string = readFileSync(ENV_FILE_PATH, 'utf8');
+    // Optional: Verify integrity with a precomputed hash
+    if (EXPECTED_ENV_HASH) {
+      const computedHash: string = createHash('sha256').update(envContent).digest('hex');
+      if (computedHash !== EXPECTED_ENV_HASH) {
+        throw new Error('Integrity check failed: .env file hash does not match expected value.');
+      }
+    }
+
+    const envVars: Record<string, string> = envContent.split('\n').reduce((acc, line) => {
+      const [key, value] = line.split('=');
+      if (key && value) acc[key.trim()] = value.trim();
+      return acc;
+    }, {} as Record<string, string>);
+
+    const envKey: string | undefined = envVars.RECALL_PRIVATE_KEY;
+    if (!envKey) {
+      throw new Error('RECALL_PRIVATE_KEY not found in .env file.');
+    }
+
+    secretBuffer = sodium.sodium_malloc(envKey.length) as sodium.SecureBuffer;
+    secretBuffer.write(envKey);
+    sodium.sodium_mlock(secretBuffer); // Lock memory to prevent swapping
+    process.env.RECALL_PRIVATE_KEY = '[REDACTED]';
+    logger.info(`Loaded RECALL_PRIVATE_KEY from .env file at: ${ENV_FILE_PATH}`);
+    secretLoaded = true;
+  } catch (error: unknown) {
+    const message: string = error instanceof Error ? error.message : String(error);
+    logger.warn(`No valid .env file found or RECALL_PRIVATE_KEY missing: ${message}. Will fail if required.`);
   }
 };
 
-// Initialize environment variables
-setupEnvironment();
+// Initialize secrets
+loadSecrets();
 
-// Constants for Recall configuration - Default values for optional variables
-export const RECALL_BUCKET_ALIAS = process.env.RECALL_BUCKET_ALIAS || 'sequential-thinking-logs';
-export const RECALL_LOG_PREFIX = process.env.RECALL_LOG_PREFIX || 'sequential-';
-export const RECALL_NETWORK = process.env.RECALL_NETWORK || 'testnet';
+// Export configuration object using Config interface
+export const config: Config = {
+  RECALL_BUCKET_ALIAS: process.env.RECALL_BUCKET_ALIAS || 'sequential-thinking-logs',
+  RECALL_LOG_PREFIX: process.env.RECALL_LOG_PREFIX || 'sequential-',
+  RECALL_NETWORK: process.env.RECALL_NETWORK || 'testnet',
+};
 
-// Sanitize sensitive environment variables for logging and display
-export function sanitizeSecrets(obj: Record<string, any>) {
-  const result = { ...obj };
-  
-  // Keys that should be considered sensitive and redacted
-  const sensitiveKeys = [
-    'private_key', 'privatekey', 'secret', 'password', 'pass', 'key',
-    'token', 'auth', 'credential', 'sign', 'encrypt'
-  ];
-  
-  for (const key in result) {
-    const lowerKey = key.toLowerCase();
-    
-    // Check if this is a sensitive key
-    if (sensitiveKeys.some(sk => lowerKey.includes(sk)) && typeof result[key] === 'string') {
-      const value = result[key] as string;
-      if (value.length > 8) {
-        // Show only the first 4 and last 4 characters if long enough
-        result[key] = `${value.substring(0, 4)}...${value.substring(value.length - 4)}`;
-      } else {
-        // For shorter values, just show ****
-        result[key] = '********';
-      }
-    }
-  }
-  
-  return result;
-}
-
-// Export the RECALL_PRIVATE_KEY getter with additional protection
-let privateKeyRaw: string | undefined = process.env.RECALL_PRIVATE_KEY;
-
+// Secure private key access
 export function getPrivateKey(): string {
-  if (!privateKeyRaw) {
-    throw new Error('RECALL_PRIVATE_KEY is required. Please provide it in Cursor/Claude configuration or in a .env file.');
+  if (!secretBuffer) {
+    throw new Error('RECALL_PRIVATE_KEY is required but not available.');
   }
-  
-  // Use the key and then clear it from module memory
-  const key = privateKeyRaw;
-  privateKeyRaw = undefined;
-  
-  // Completely remove the private key from environment variables
-  process.env.RECALL_PRIVATE_KEY = '[REDACTED_AFTER_USE]';
-  
-  // Instead of using Object.defineProperty, which doesn't work on process.env,
-  // we'll just log attempts to access the redacted key elsewhere
-  
+
+  const key: string = secretBuffer.toString('utf8');
+  sodium.sodium_memzero(secretBuffer); // Zero out immediately after use
+  sodium.sodium_munlock(secretBuffer); // Unlock and zero memory
+  secretBuffer = null;
+  secretLoaded = false; // Force reload if needed again
   return key;
 }
 
-/**
- * Prevent potential security issues by throwing errors on attempts to get sensitive data
- */
-export function getEnvironmentVariables(): never {
-  throw new Error('Security violation: This method is designed to prevent accidental exposure of sensitive environment variables.');
-}
-
-// Validate that required environment variables are set
+// Validate environment
 export function validateEnv(): void {
-  const requiredVars = ['RECALL_PRIVATE_KEY'];
-  const recommendedVars = ['RECALL_NETWORK', 'RECALL_BUCKET_ALIAS', 'RECALL_LOG_PREFIX'];
-  
-  // Check for required variables
-  const missingVars = requiredVars.filter(varName => !process.env[varName]);
-  
-  if (missingVars.length > 0) {
-    throw new Error(`Missing required environment variables: ${missingVars.join(', ')}. 
-Please provide them in Cursor/Claude configuration or in a .env file.`);
+  if (!secretLoaded && !secretBuffer) {
+    throw new Error('Missing required RECALL_PRIVATE_KEY. Provide it via environment variables or .env.');
   }
-  
-  // Check for recommended variables
-  const missingRecommended = recommendedVars.filter(varName => !process.env[varName]);
-  
-  if (missingRecommended.length > 0) {
-    console.warn(chalk.yellow(`⚠️ Missing recommended environment variables: ${missingRecommended.join(', ')}. Using defaults.`));
+  const recommendedVars: (keyof Config)[] = ['RECALL_NETWORK', 'RECALL_BUCKET_ALIAS', 'RECALL_LOG_PREFIX'];
+  const missing: string[] = recommendedVars.filter((v) => !process.env[v]);
+  if (missing.length > 0) {
+    logger.warn(`Missing recommended variables: ${missing.join(', ')}. Using defaults.`);
   }
 }
 
-// Set up console security to redact sensitive information
-export function setupSecureConsole(): void {
-  const originalConsoleError = console.error;
-  const originalConsoleWarn = console.warn;
-  const originalConsoleLog = console.log;
-  
-  const redactPrivateKeys = (args: any[]) => {
-    return args.map(arg => {
-      if (typeof arg === 'string') {
-        return arg.replace(/0x[a-fA-F0-9]{64}/g, '[REDACTED_PRIVATE_KEY]')
-                  .replace(/(RECALL_PRIVATE_KEY|private_key|privatekey)=([^&\s]+)/gi, '$1=[REDACTED]');
-      } else if (arg && typeof arg === 'object') {
-        try {
-          return sanitizeSecrets(arg);
-        } catch (e) {
-          return arg;
-        }
-      }
-      return arg;
-    });
-  };
-  
-  console.error = (...args: any[]) => {
-    originalConsoleError(...redactPrivateKeys(args));
-  };
-  
-  console.warn = (...args: any[]) => {
-    originalConsoleWarn(...redactPrivateKeys(args));
-  };
-  
-  console.log = (...args: any[]) => {
-    originalConsoleLog(...redactPrivateKeys(args));
-  };
-}
-
-// Helper function to log configuration status on startup
+// Setup logging and status
 export function logConfigStatus(): void {
-  // Validate environment variables before logging
   validateEnv();
-  
-  // Set up secure console
-  setupSecureConsole();
-  
-  // Determine the source of environment variables
-  let configSource = "default values only";
-  
-  if (privateKeyRaw) {
-    configSource = "Cursor/Claude configuration";
-  } else if (process.env.RECALL_PRIVATE_KEY === '[REDACTED_AFTER_USE]') {
-    configSource = "environment or .env file";
-  }
-  
-  console.error(chalk.blue('📋 Configuration loaded:'));
-  console.error(chalk.blue(`  • Configuration source: ${configSource}`));
-  console.error(chalk.blue(`  • Bucket Alias: ${RECALL_BUCKET_ALIAS}`));
-  console.error(chalk.blue(`  • Log Prefix: ${RECALL_LOG_PREFIX}`));
-  console.error(chalk.blue(`  • Network: ${RECALL_NETWORK}`));
-  console.error(chalk.blue(`  • Private Key: ${privateKeyRaw ? '[PROVIDED]' : '[MISSING]'}`));
-} 
+  logger.info('Configuration loaded:');
+  logger.info(`  • Source: ${secretLoaded ? (process.env.RECALL_PRIVATE_KEY === '[REDACTED]' ? 'external' : '.env') : 'none'}`);
+  logger.info(`  • Bucket Alias: ${config.RECALL_BUCKET_ALIAS}`);
+  logger.info(`  • Log Prefix: ${config.RECALL_LOG_PREFIX}`);
+  logger.info(`  • Network: ${config.RECALL_NETWORK}`);
+  logger.info(`  • Private Key: ${secretBuffer ? '[PROVIDED]' : '[MISSING]'}`);
+}

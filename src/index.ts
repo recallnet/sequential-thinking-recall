@@ -1,12 +1,4 @@
-#!/usr/bin/env node
-
-// Add debug logging to help diagnose startup issues
-console.error("Starting Sequential Thinking MCP Server...");
-console.error(`Environment variables present: ${Object.keys(process.env).filter(k => !k.includes('KEY') && !k.includes('SECRET')).join(', ')}`);
-
-// Import configuration first to ensure environment variables are loaded
-import { RECALL_BUCKET_ALIAS, RECALL_LOG_PREFIX, logConfigStatus } from './config.js';
-
+import { config, logger } from './config.js';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -16,13 +8,9 @@ import {
   ListResourcesRequestSchema,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-// Fixed chalk import for ESM
 import chalk from 'chalk';
-// Import our RecallIntegration
 import { recallIntegration } from './recall-integration.js';
 
-// Log configuration status
-logConfigStatus();
 
 interface ThoughtData {
   thought: string;
@@ -51,12 +39,12 @@ class SequentialThinkingServer {
 
   private generateNewSessionId(): string {
     this.currentSessionId = `session-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-    console.error(chalk.blue(`🔄 Created new session ID: ${this.currentSessionId}`));
+    logger.error(chalk.blue(`🔄 Created new session ID: ${this.currentSessionId}`));
     return this.currentSessionId;
   }
 
   private clearSession(): void {
-    console.error(chalk.blue(`🧹 Clearing session data for ${this.currentSessionId}`));
+    logger.error(chalk.blue(`🧹 Clearing session data for ${this.currentSessionId}`));
     this.thoughtHistory = [];
     this.branches = {};
     this.currentQuery = undefined;
@@ -66,10 +54,10 @@ class SequentialThinkingServer {
   private async initializeRecall(): Promise<void> {
     try {
       await recallIntegration.initializeBucket();
-      console.error(chalk.green('🔄 Recall integration initialized for sequential thinking logs'));
+      logger.error(chalk.green('🔄 Recall integration initialized for sequential thinking logs'));
     } catch (error: any) {
-      console.error(chalk.yellow(`⚠️ Recall initialization failed: ${error.message}`));
-      console.error(chalk.yellow('Sequential thinking will still work but logs won\'t be stored in Recall'));
+      logger.error(chalk.yellow(`⚠️ Recall initialization failed: ${error.message}`));
+      logger.error(chalk.yellow('Sequential thinking will still work but logs won\'t be stored in Recall'));
     }
   }
 
@@ -134,12 +122,12 @@ class SequentialThinkingServer {
     if (this.thoughtHistory.length === 0) return undefined;
     
     try {
-      console.error(chalk.blue(`🔍 Debug: Attempting to store session ${this.currentSessionId} with ${this.thoughtHistory.length} thoughts to Recall`));
+      logger.error(chalk.blue(`🔍 Debug: Attempting to store session ${this.currentSessionId} with ${this.thoughtHistory.length} thoughts to Recall`));
       const status = await recallIntegration.getStatusInfo();
-      console.error(chalk.blue(`🔍 Debug: Recall status before storing session: ${JSON.stringify(status, null, 2)}`));
+      logger.error(chalk.blue(`🔍 Debug: Recall status before storing session: ${JSON.stringify(status, null, 2)}`));
       
       // Store the session with all accumulated thoughts
-      console.error(chalk.blue(`🔍 Debug: Storing complete thought history with ${this.thoughtHistory.length} thoughts`));
+      logger.error(chalk.blue(`🔍 Debug: Storing complete thought history with ${this.thoughtHistory.length} thoughts`));
       
       // Create a deep clone of the thoughts to prevent any reference issues
       const thoughtsToStore = this.thoughtHistory.map(thought => ({
@@ -160,7 +148,7 @@ class SequentialThinkingServer {
       
       // Log each thought for debugging
       thoughtsToStore.forEach((thought, index) => {
-        console.error(chalk.blue(`🔍 Debug: Thought ${index + 1}: ${JSON.stringify({
+        logger.error(chalk.blue(`🔍 Debug: Thought ${index + 1}: ${JSON.stringify({
           thought: thought.thought.substring(0, 50) + (thought.thought.length > 50 ? '...' : ''),
           thoughtNumber: thought.thoughtNumber,
           totalThoughts: thought.totalThoughts,
@@ -178,15 +166,15 @@ class SequentialThinkingServer {
       );
       
       if (storeResult?.success) {
-        console.error(chalk.green(`✅ Debug: Successfully stored session with result: ${JSON.stringify(storeResult, null, 2)}`));
+        logger.error(chalk.green(`✅ Debug: Successfully stored session with result: ${JSON.stringify(storeResult, null, 2)}`));
       } else {
-        console.error(chalk.yellow(`⚠️ Debug: Store session returned unsuccessful result`));
+        logger.error(chalk.yellow(`⚠️ Debug: Store session returned unsuccessful result`));
       }
       
       return storeResult;
     } catch (error: any) {
-      console.error(chalk.red(`❌ Error handling session storage: ${error.message}`));
-      console.error(chalk.red(`Stack trace: ${error.stack}`));
+      logger.error(chalk.red(`❌ Error handling session storage: ${error.message}`));
+      logger.error(chalk.red(`Stack trace: ${error.stack}`));
       return undefined;
     }
   }
@@ -198,7 +186,7 @@ class SequentialThinkingServer {
       // Save the query if provided and not already set
       if (query && !this.currentQuery) {
         this.currentQuery = query;
-        console.error(chalk.blue(`🔍 Set query: "${query.substring(0, 50)}${query.length > 50 ? '...' : ''}"`));
+        logger.error(chalk.blue(`🔍 Set query: "${query.substring(0, 50)}${query.length > 50 ? '...' : ''}"`));
       }
 
       if (validatedInput.thoughtNumber > validatedInput.totalThoughts) {
@@ -207,7 +195,7 @@ class SequentialThinkingServer {
 
       // Add to our local thought history
       this.thoughtHistory.push(validatedInput);
-      console.error(chalk.blue(`📝 Added thought #${validatedInput.thoughtNumber} to memory (now have ${this.thoughtHistory.length} thoughts)`));
+      logger.error(chalk.blue(`📝 Added thought #${validatedInput.thoughtNumber} to memory (now have ${this.thoughtHistory.length} thoughts)`));
 
       if (validatedInput.branchFromThought && validatedInput.branchId) {
         if (!this.branches[validatedInput.branchId]) {
@@ -217,26 +205,26 @@ class SequentialThinkingServer {
       }
 
       const formattedThought = this.formatThought(validatedInput);
-      console.error(formattedThought);
+      logger.error(formattedThought);
 
       // If this is the last thought (nextThoughtNeeded is false), store the complete session
       let sessionInfo;
       if (!validatedInput.nextThoughtNeeded) {
-        console.error(chalk.blue(`🔍 Debug: Final thought received (${validatedInput.thoughtNumber}/${validatedInput.totalThoughts}), storing complete session to Recall`));
+        logger.error(chalk.blue(`🔍 Debug: Final thought received (${validatedInput.thoughtNumber}/${validatedInput.totalThoughts}), storing complete session to Recall`));
         
         // Log the number of thoughts we have in memory before storage
-        console.error(chalk.blue(`📊 Debug: Thought history contains ${this.thoughtHistory.length} thoughts before storage`));
+        logger.error(chalk.blue(`📊 Debug: Thought history contains ${this.thoughtHistory.length} thoughts before storage`));
         
         // Store all thoughts at once
         sessionInfo = await this.storeSessionToRecall();
         
-        // Direct console output for debugging Recall transactions
+        // Direct logger output for debugging Recall transactions
         if (sessionInfo) {
           // Get the bucketAddress for the portal URL
           const recallStatus = await recallIntegration.getStatusInfo();
           const portalUrl = `https://portal.recall.network/buckets/${recallStatus.bucketAddress}?path=${sessionInfo.key}`;
           
-          console.error(chalk.magenta(`
+          logger.error(chalk.magenta(`
 ╔═════════════════════════════════════════════════════════
 ║ 📊 RECALL SESSION QUEUED
 ║ Key: ${sessionInfo.key}
@@ -252,13 +240,13 @@ class SequentialThinkingServer {
           if (sessionInfo.success) {
             // Clear the session data
             this.clearSession();
-            console.error(chalk.green(`✅ Session data cleared, ready for new thoughts`));
+            logger.error(chalk.green(`✅ Session data cleared, ready for new thoughts`));
           }
         } else {
-          console.error(chalk.yellow(`⚠️ Warning: No session info returned from storeSessionToRecall!`));
+          logger.error(chalk.yellow(`⚠️ Warning: No session info returned from storeSessionToRecall!`));
         }
       } else {
-        console.error(chalk.blue(`🔍 Debug: Non-final thought #${validatedInput.thoughtNumber} added to memory, waiting for more thoughts`));
+        logger.error(chalk.blue(`🔍 Debug: Non-final thought #${validatedInput.thoughtNumber} added to memory, waiting for more thoughts`));
       }
 
       // Build the response with recall information if available
@@ -519,31 +507,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const query = args?._metadata?.query || args?._meta?.query || undefined;
       
       // Add debug output for tracking requests
-      console.error(chalk.blue(`🔄 Received sequential thinking request with thought #${args.thoughtNumber}/${args.totalThoughts}`));
-      console.error(chalk.blue(`🔄 Thought content: ${args.thought.substring(0, 100)}${args.thought.length > 100 ? '...' : ''}`));
+      logger.error(chalk.blue(`🔄 Received sequential thinking request with thought #${args.thoughtNumber}/${args.totalThoughts}`));
+      logger.error(chalk.blue(`🔄 Thought content: ${args.thought.substring(0, 100)}${args.thought.length > 100 ? '...' : ''}`));
       
       // Check Recall status before processing
       try {
         const status = await recallIntegration.getStatusInfo();
-        console.error(chalk.blue(`🔍 Current Recall status: ${JSON.stringify(status, null, 2)}`));
+        logger.error(chalk.blue(`🔍 Current Recall status: ${JSON.stringify(status, null, 2)}`));
       } catch (error: any) {
-        console.error(chalk.yellow(`⚠️ Error checking Recall status: ${error.message}`));
+        logger.error(chalk.yellow(`⚠️ Error checking Recall status: ${error.message}`));
       }
       
       return await thinkingServer.processThought(request.params.arguments, query);
     } else if (request.params.name === "recallstatus") {
       try {
         // Check if Recall is initialized
-        console.error(chalk.blue('🔍 Checking Recall status...'));
+        logger.error(chalk.blue('🔍 Checking Recall status...'));
         
         // Force initialize if needed
         if (!recallIntegration.isInitialized()) {
-          console.error(chalk.yellow('⚠️ Recall not initialized, reinitializing...'));
+          logger.error(chalk.yellow('⚠️ Recall not initialized, reinitializing...'));
           await recallIntegration.initializeBucket();
         }
         
         const bucketInfo = await recallIntegration.getStatusInfo();
-        console.error(chalk.green(`✅ Recall status check succeeded: ${JSON.stringify(bucketInfo, null, 2)}`));
+        logger.error(chalk.green(`✅ Recall status check succeeded: ${JSON.stringify(bucketInfo, null, 2)}`));
         
         return {
           content: [{
@@ -552,14 +540,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               recallStatus: {
                 initialized: bucketInfo.initialized,
                 bucketAddress: bucketInfo.bucketAddress,
-                bucketAlias: RECALL_BUCKET_ALIAS,
-                logPrefix: RECALL_LOG_PREFIX
+                bucketAlias: config.RECALL_BUCKET_ALIAS,
+                logPrefix: config.RECALL_LOG_PREFIX
               }
             }, null, 2)
           }]
         };
       } catch (error) {
-        console.error(chalk.red(`❌ Error checking Recall status: ${error instanceof Error ? error.message : String(error)}`));
+        logger.error(chalk.red(`❌ Error checking Recall status: ${error instanceof Error ? error.message : String(error)}`));
         
         return {
           content: [{
@@ -576,11 +564,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     } else if (request.params.name === "listsessions") {
       // Implementation for listing sessions
       try {
-        console.error(chalk.blue('🔍 Listing all sequential thinking sessions...'));
+        logger.error(chalk.blue('🔍 Listing all sequential thinking sessions...'));
         
         // Force initialize if needed
         if (!recallIntegration.isInitialized()) {
-          console.error(chalk.yellow('⚠️ Recall not initialized, reinitializing...'));
+          logger.error(chalk.yellow('⚠️ Recall not initialized, reinitializing...'));
           await recallIntegration.initializeBucket();
         }
         
@@ -614,7 +602,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         });
         
-        console.error(chalk.green(`✅ Successfully retrieved ${sessionObjects.length} session objects`));
+        logger.error(chalk.green(`✅ Successfully retrieved ${sessionObjects.length} session objects`));
         
         return {
           content: [{
@@ -627,7 +615,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }]
         };
       } catch (error) {
-        console.error(chalk.red(`❌ Error listing sessions: ${error instanceof Error ? error.message : String(error)}`));
+        logger.error(chalk.red(`❌ Error listing sessions: ${error instanceof Error ? error.message : String(error)}`));
         
         return {
           content: [{
@@ -650,11 +638,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           throw new Error('Session key is required');
         }
         
-        console.error(chalk.blue(`🔍 Retrieving session file: ${sessionKey}`));
+        logger.error(chalk.blue(`🔍 Retrieving session file: ${sessionKey}`));
         
         // Force initialize if needed
         if (!recallIntegration.isInitialized()) {
-          console.error(chalk.yellow('⚠️ Recall not initialized, reinitializing...'));
+          logger.error(chalk.yellow('⚠️ Recall not initialized, reinitializing...'));
           await recallIntegration.initializeBucket();
         }
         
@@ -669,7 +657,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const status = await recallIntegration.getStatusInfo();
         const portalLink = `https://portal.recall.network/buckets/${status.bucketAddress}?path=${sessionKey}`;
         
-        console.error(chalk.green(`✅ Successfully retrieved session: ${sessionKey}`));
+        logger.error(chalk.green(`✅ Successfully retrieved session: ${sessionKey}`));
         
         return {
           content: [{
@@ -682,7 +670,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }]
         };
       } catch (error) {
-        console.error(chalk.red(`❌ Error retrieving session: ${error instanceof Error ? error.message : String(error)}`));
+        logger.error(chalk.red(`❌ Error retrieving session: ${error instanceof Error ? error.message : String(error)}`));
         
         return {
           content: [{
@@ -705,8 +693,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true
     };
   } catch (error: any) {
-    console.error(chalk.red(`❌ Unhandled error in request handler: ${error.message}`));
-    console.error(chalk.red(`Stack trace: ${error.stack}`));
+    logger.error(chalk.red(`❌ Unhandled error in request handler: ${error.message}`));
+    logger.error(chalk.red(`Stack trace: ${error.stack}`));
     
     return {
       content: [{
@@ -723,19 +711,19 @@ async function runServer() {
   
   // Initialize Recall integration before starting the server
   try {
-    console.error(chalk.blue("🔄 Initializing Recall integration before server start..."));
+    logger.error(chalk.blue("🔄 Initializing Recall integration before server start..."));
     await recallIntegration.initializeBucket();
     const status = await recallIntegration.getStatusInfo();
-    console.error(chalk.green(`✅ Recall initialized successfully: ${JSON.stringify(status, null, 2)}`));
+    logger.error(chalk.green(`✅ Recall initialized successfully: ${JSON.stringify(status, null, 2)}`));
   } catch (error: any) {
-    console.error(chalk.yellow(`⚠️ Failed to initialize Recall before server start: ${error.message}`));
+    logger.error(chalk.yellow(`⚠️ Failed to initialize Recall before server start: ${error.message}`));
   }
   
   await server.connect(transport);
-  console.error("Sequential Thinking MCP Server running on stdio");
+  logger.error("Sequential Thinking MCP Server running on stdio");
 }
 
 runServer().catch((error) => {
-  console.error("Fatal error running server:", error);
+  logger.error("Fatal error running server:", error);
   process.exit(1);
 });

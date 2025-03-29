@@ -2,7 +2,7 @@ import { RecallClient, walletClientFromPrivateKey } from '@recallnet/sdk/client'
 import { ChainName, getChain, testnet } from '@recallnet/chains';
 import { Address, Hex } from 'viem';
 import chalk from 'chalk';
-import { RECALL_BUCKET_ALIAS, RECALL_LOG_PREFIX, RECALL_NETWORK, getPrivateKey } from './config.js';
+import { config, getPrivateKey, logger } from './config.js';
 
 // Interface for the thought data
 interface ThoughtData {
@@ -40,8 +40,8 @@ class RecallIntegration {
   private client: RecallClient;
   private bucketAddress: Address | null = null;
   private initialized = false;
-  private bucketAlias = RECALL_BUCKET_ALIAS;
-  private logPrefix = RECALL_LOG_PREFIX;
+  private bucketAlias = config.RECALL_BUCKET_ALIAS;
+  private logPrefix = config.RECALL_LOG_PREFIX;
   private currentSessionThoughts: (ThoughtData & { timestamp: number, storedAt: string })[] = [];
   private static instance: RecallIntegration;
 
@@ -49,7 +49,7 @@ class RecallIntegration {
     try {
       // Get the private key from centralized config
       const privateKeyRaw = getPrivateKey();
-      const network = RECALL_NETWORK;
+      const network = config.RECALL_NETWORK;
 
       // Format the private key: If it doesn't start with "0x", prepend it
       const privateKey = privateKeyRaw.startsWith('0x') 
@@ -65,9 +65,9 @@ class RecallIntegration {
       // and will be garbage collected once this function exits
       
       this.client = new RecallClient({ walletClient: wallet });
-      console.error(chalk.green('📡 Recall client initialized successfully'));
+      logger.error(chalk.green('📡 Recall client initialized successfully'));
     } catch (error: any) {
-      console.error(chalk.red(`❌ Error initializing Recall in constructor: ${error.message}`));
+      logger.error(chalk.red(`❌ Error initializing Recall in constructor: ${error.message}`));
       throw error;
     }
   }
@@ -139,9 +139,9 @@ class RecallIntegration {
         'Bucket initialization'
       );
       this.initialized = true;
-      console.error(chalk.green('✅ Recall bucket initialized successfully'));
+      logger.error(chalk.green('✅ Recall bucket initialized successfully'));
     } catch (error: any) {
-      console.error(chalk.red(`❌ Error initializing Recall bucket: ${error.message}`));
+      logger.error(chalk.red(`❌ Error initializing Recall bucket: ${error.message}`));
       throw error;
     }
   }
@@ -161,17 +161,17 @@ class RecallIntegration {
    */
   private async getOrCreateBucket(bucketAlias: string): Promise<Address> {
     try {
-      console.error(chalk.blue(`🔍 Looking for bucket with alias: ${bucketAlias}`));
+      logger.error(chalk.blue(`🔍 Looking for bucket with alias: ${bucketAlias}`));
 
       // Try to find the bucket by alias
       const buckets = await this.client.bucketManager().list();
       if (buckets?.result) {
         const bucket = buckets.result.find((b) => b.metadata?.alias === bucketAlias);
         if (bucket) {
-          console.error(chalk.green(`✅ Found existing bucket "${bucketAlias}" at ${bucket.addr}`));
+          logger.error(chalk.green(`✅ Found existing bucket "${bucketAlias}" at ${bucket.addr}`));
           return bucket.addr;
         } else {
-          console.error(chalk.yellow(`⚠️ Bucket with alias "${bucketAlias}" not found, creating a new one.`));
+          logger.error(chalk.yellow(`⚠️ Bucket with alias "${bucketAlias}" not found, creating a new one.`));
         }
       }
 
@@ -185,10 +185,10 @@ class RecallIntegration {
         throw new Error(`Failed to create bucket: ${bucketAlias}`);
       }
 
-      console.error(chalk.green(`✅ Successfully created new bucket "${bucketAlias}" at ${newBucket.bucket}`));
+      logger.error(chalk.green(`✅ Successfully created new bucket "${bucketAlias}" at ${newBucket.bucket}`));
       return newBucket.bucket;
     } catch (error: any) {
-      console.error(chalk.red(`❌ Error in getOrCreateBucket: ${error.message}`));
+      logger.error(chalk.red(`❌ Error in getOrCreateBucket: ${error.message}`));
       throw error;
     }
   }
@@ -202,7 +202,7 @@ class RecallIntegration {
     await this.ensureInitialized();
     
     if (this.currentSessionThoughts.length === 0) {
-      console.error(chalk.yellow('⚠️ No thoughts to store - returning undefined'));
+      logger.error(chalk.yellow('⚠️ No thoughts to store - returning undefined'));
       return undefined;
     }
 
@@ -211,15 +211,15 @@ class RecallIntegration {
       const key = `${this.logPrefix}${timestamp}-session.jsonl`;
       
       // Log the current thoughts for debugging
-      console.error(chalk.blue(`📦 Current thoughts in memory:`));
+      logger.error(chalk.blue(`📦 Current thoughts in memory:`));
       this.currentSessionThoughts.forEach((thought, index) => {
-        console.error(chalk.blue(`   Thought ${index + 1}: ${JSON.stringify(thought)}`));
+        logger.error(chalk.blue(`   Thought ${index + 1}: ${JSON.stringify(thought)}`));
       });
       
       // Validate and ensure all thoughts have the required fields
       const validatedThoughts = this.currentSessionThoughts.map((thought, index) => {
         if (!thought.thought) {
-          console.error(chalk.yellow(`⚠️ Missing thought content for thought ${index + 1}, using placeholder`));
+          logger.error(chalk.yellow(`⚠️ Missing thought content for thought ${index + 1}, using placeholder`));
           return {
             ...thought,
             thought: `Thought ${index + 1} (content missing)`,
@@ -231,8 +231,8 @@ class RecallIntegration {
       // Convert thoughts to JSONL format (one JSON object per line)
       const jsonlData = validatedThoughts.map(thought => JSON.stringify(thought)).join('\n');
       
-      console.error(chalk.blue(`📦 Storing complete session with ${validatedThoughts.length} thoughts (${jsonlData.length} bytes)`));
-      console.error(chalk.gray(`📄 JSONL data preview: ${jsonlData.substring(0, 200)}...`));
+      logger.error(chalk.blue(`📦 Storing complete session with ${validatedThoughts.length} thoughts (${jsonlData.length} bytes)`));
+      logger.error(chalk.gray(`📄 JSONL data preview: ${jsonlData.substring(0, 200)}...`));
       
       // Add the JSONL data to the bucket with timeout
       let result;
@@ -247,7 +247,7 @@ class RecallIntegration {
           'Session storage'
         );
       } catch (storageError: any) {
-        console.error(chalk.red(`❌ Error during bucket storage: ${storageError.message}`));
+        logger.error(chalk.red(`❌ Error during bucket storage: ${storageError.message}`));
         return {
           success: false,
           key,
@@ -260,15 +260,15 @@ class RecallIntegration {
       this.currentSessionThoughts = [];
       
       if (result.meta?.tx) {
-        console.error(chalk.green(`✅ Successfully stored session with ${thoughtCount} thoughts to Recall`));
-        console.error(chalk.green(`🔗 Transaction hash: ${result.meta.tx.transactionHash}`));
+        logger.error(chalk.green(`✅ Successfully stored session with ${thoughtCount} thoughts to Recall`));
+        logger.error(chalk.green(`🔗 Transaction hash: ${result.meta.tx.transactionHash}`));
         return {
           txHash: result.meta.tx.transactionHash,
           success: true,
           key
         };
       } else {
-        console.error(chalk.yellow(`⚠️ No transaction receipt when storing session - operation queued but not confirmed`));
+        logger.error(chalk.yellow(`⚠️ No transaction receipt when storing session - operation queued but not confirmed`));
         return {
           success: true, // Still consider this success as the operation was accepted
           key,
@@ -276,7 +276,7 @@ class RecallIntegration {
         };
       }
     } catch (error: any) {
-      console.error(chalk.red(`❌ Error storing session to Recall: ${error.message}`));
+      logger.error(chalk.red(`❌ Error storing session to Recall: ${error.message}`));
       return undefined;
     }
   }
@@ -290,11 +290,11 @@ class RecallIntegration {
     await this.ensureInitialized();
 
     try {
-      console.error(chalk.blue(`📦 storeSession called with ${thoughts.length} thoughts and queryInfo: ${JSON.stringify(queryInfo)}`));
+      logger.error(chalk.blue(`📦 storeSession called with ${thoughts.length} thoughts and queryInfo: ${JSON.stringify(queryInfo)}`));
       
       // Log the incoming thoughts for debugging
       thoughts.forEach((thought, index) => {
-        console.error(chalk.blue(`   Incoming thought ${index + 1}: ${JSON.stringify(thought)}`));
+        logger.error(chalk.blue(`   Incoming thought ${index + 1}: ${JSON.stringify(thought)}`));
       });
       
       // MODIFIED: We no longer try to store any current thoughts that might be in memory
@@ -304,7 +304,7 @@ class RecallIntegration {
       // Add the new thoughts to our memory, validating content
       const enhancedThoughts = thoughts.map((thought, index) => {
         if (!thought.thought) {
-          console.error(chalk.yellow(`⚠️ Missing thought content for incoming thought ${index + 1}, using placeholder`));
+          logger.error(chalk.yellow(`⚠️ Missing thought content for incoming thought ${index + 1}, using placeholder`));
           return {
             ...thought,
             thought: `Thought ${index + 1} (content missing)`,
@@ -325,18 +325,18 @@ class RecallIntegration {
         };
       });
       
-      console.error(chalk.blue(`📦 Enhanced thoughts: ${JSON.stringify(enhancedThoughts.slice(0, 1))}`));
+      logger.error(chalk.blue(`📦 Enhanced thoughts: ${JSON.stringify(enhancedThoughts.slice(0, 1))}`));
       
       // Clear any previous thoughts and replace with the new batch
       // This ensures we're only storing what the server explicitly sent us
-      console.error(chalk.blue(`📦 Replacing current thoughts (${this.currentSessionThoughts.length}) with new batch (${enhancedThoughts.length})`));
+      logger.error(chalk.blue(`📦 Replacing current thoughts (${this.currentSessionThoughts.length}) with new batch (${enhancedThoughts.length})`));
       this.currentSessionThoughts = enhancedThoughts;
       
       // Store the new session
-      console.error(chalk.blue(`📦 Storing new session with ${thoughts.length} thoughts`));
+      logger.error(chalk.blue(`📦 Storing new session with ${thoughts.length} thoughts`));
       return await this.storeSessionJSONL();
     } catch (error: any) {
-      console.error(chalk.red(`❌ Error storing session to Recall: ${error.message}`));
+      logger.error(chalk.red(`❌ Error storing session to Recall: ${error.message}`));
       return undefined;
     }
   }
@@ -370,7 +370,7 @@ class RecallIntegration {
       
       return [];
     } catch (error: any) {
-      console.error(chalk.red(`❌ Error listing bucket objects: ${error.message}`));
+      logger.error(chalk.red(`❌ Error listing bucket objects: ${error.message}`));
       return [];
     }
   }
@@ -430,7 +430,7 @@ class RecallIntegration {
         }
       }).filter(obj => obj.key.includes(this.logPrefix));
     } catch (error: any) {
-      console.error(chalk.red(`❌ Error listing session objects: ${error.message}`));
+      logger.error(chalk.red(`❌ Error listing session objects: ${error.message}`));
       return [];
     }
   }
@@ -461,7 +461,7 @@ class RecallIntegration {
           try {
             return JSON.parse(line);
           } catch (parseError) {
-            console.error(chalk.yellow(`⚠️ Error parsing line ${index + 1} of session: ${parseError}`));
+            logger.error(chalk.yellow(`⚠️ Error parsing line ${index + 1} of session: ${parseError}`));
             return { error: `Invalid JSON at line ${index + 1}`, lineContent: line.substring(0, 50) };
           }
         });
@@ -474,7 +474,7 @@ class RecallIntegration {
           createdAt: thoughts[0]?.timestamp ? new Date(thoughts[0].timestamp).toISOString() : 'Unknown'
         };
       } catch (parseError) {
-        console.error(chalk.red(`❌ Error parsing session content: ${parseError}`));
+        logger.error(chalk.red(`❌ Error parsing session content: ${parseError}`));
         return {
           key,
           error: 'Failed to parse session content',
@@ -482,7 +482,7 @@ class RecallIntegration {
         };
       }
     } catch (error: any) {
-      console.error(chalk.red(`❌ Error retrieving session object: ${error.message}`));
+      logger.error(chalk.red(`❌ Error retrieving session object: ${error.message}`));
       return null;
     }
   }
@@ -506,7 +506,7 @@ class RecallIntegration {
       }
       return null;
     } catch (error) {
-      console.error(`Error getting object content: ${error}`);
+      logger.error(`Error getting object content: ${error}`);
       return null;
     }
   }
