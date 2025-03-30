@@ -43,7 +43,7 @@ const redactSensitive = (input: any): any => {
 export const logger: Logger = {
   error: (...args: any[]) => process.stderr.write(`${chalk.red('[ERROR]')} ${args.map(redactSensitive).join(' ')}\n`),
   warn: (...args: any[]) => process.stderr.write(`${chalk.yellow('[WARN]')} ${args.map(redactSensitive).join(' ')}\n`),
-  info: (...args: any[]) => process.stdout.write(`${chalk.blue('[INFO]')} ${args.map(redactSensitive).join(' ')}\n`),
+  info: (...args: any[]) => process.stderr.write(`${chalk.blue('[INFO]')} ${args.map(redactSensitive).join(' ')}\n`),
 };
 
 // Secure secret storage
