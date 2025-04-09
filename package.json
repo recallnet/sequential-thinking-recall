@@ -11,8 +11,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.0.1",
-    "@recallnet/chains": "^0.0.6",
-    "@recallnet/sdk": "^0.0.7",
+    "@recallnet/chains": "^0.0.7",
+    "@recallnet/sdk": "^0.0.8",
     "chalk": "^5.3.0",
     "dotenv": "^16.3.1",
     "sodium-native": "^4.3.3",
